@@ -1,0 +1,95 @@
+#-*- coding:utf-8 -*-
+from scrapy.selector import HtmlXPathSelector
+from scrapy.spider import BaseSpider
+from scrapy.contrib.linkextractors.sgml import SgmlLinkExtractor
+from scrapy.utils.url import urljoin_rfc
+from scrapy.http import Request
+from RedisUtils import  RedisUtils
+import re
+import os
+from guba.items import GubaItem
+
+class GubaSpider(BaseSpider):
+    name = "guba"
+    code = "002241"
+    redisUtils=RedisUtils()
+    #domain = "http://guba.eastmoney.com"
+    start_urls = [
+        "http://guba.eastmoney.com/list,"+code+".html",
+    ]
+    
+    def parse(self, response):
+	if not os.path.exists('news_'+self.code):
+		os.mkdir('news_'+self.code)
+        filename = response.url.split("/")[-1]
+        htmlFile=str(response.body)
+        #find out the all pages
+        pattern = re.compile(r'.*共有帖子数 ([0-9]+) 篇.*',re.S|re.M)
+        match=pattern.match(htmlFile)
+        page_number=0
+        if match:
+            page_number=int(match.group(1))
+            page_number=int(page_number)
+            if(page_number%80==0):
+                page_number=page_number/80
+            else:
+                page_number=page_number/80+1
+        print page_number
+        print 'have '+str(page_number)+' pages'
+        #save the urls            
+        for page in range(1,page_number):
+            url='http://guba.eastmoney.com/list,'+self.code+'_'+str(page)+'.html'
+            exist=self.redisUtils.isExist(url)
+            if (not exist):
+                 self.redisUtils.saveUrl(url)
+        
+        while True:
+            print 'get a list job'
+            url=self.redisUtils.getUrl()
+            url=str(url)
+            if(cmp(url,'None')):
+                url=str(url)
+                if 'list' in url: #the get the urls from the page
+                    print 'get urls from the page:'+url
+                    yield Request(url,callback=self.parse_url)
+                else:              #the get the detail from the page
+                    print 'get content from the page:'+url                    
+                    yield Request(url,callback=self.parse_detail)
+            else:
+                break   
+
+    def parse_url(self, response):
+        htmlFile=str(response.body)
+        for link in SgmlLinkExtractor(allow="news,"+self.code+"(.*?)html").extract_links(response):
+            exist=self.redisUtils.isExist(link.url)
+            if (not exist):
+                self.redisUtils.saveUrl(link.url)
+
+	while True:
+            print 'get a detail job'
+            url=self.redisUtils.getUrl()
+            url=str(url)
+            if(cmp(url,'None')):
+                url=str(url)
+                if 'news' in url: #the get the detail from the page
+                    print 'get urls from the page:'+url
+                    yield Request(url,callback=self.parse_detail)
+            else:
+                break 
+        return
+       
+    def parse_detail(self, response):
+        filename = response.url.split("/")[-1]
+        open('news_'+self.code+'/'+filename, 'wb').write(response.body)
+        print '*********************save file **************************'
+        #hxs = HtmlXPathSelector(response)
+        #print hxs.select("/html/head/title/text()")
+        #what_u_want= hxs.select("/xpath/text()").extract()[0]
+        #print 'url=',response.url, what_u_want.strip()
+        #item = GubaItem()
+        #return item
+        
+    def _urljoin(self, response, url):
+        """Helper to convert relative urls to absolute"""
+        return urljoin_rfc(response.url, url, response.encoding)
+
